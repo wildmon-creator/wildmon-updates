@@ -1,6 +1,6 @@
 name: Guncelleme paketini yayinla
 # parts/ klasorune parcalar halinde gonderilen paketi birlestirir, md5 dogrular, GitHub Release'e koyar,
-# latest.json'u release adresine cevirir ve parcalari depodan siler (tek dosya 100 MB siniri ve depo sismesi olmasin).
+# latest.json'daki zincire yeni halkayi ekler ve parcalari depodan siler (tek dosya 100 MB siniri ve depo sismesi olmasin).
 on:
   push:
     branches: [main]
@@ -36,7 +36,13 @@ jobs:
         run: |
           TAG=${{ steps.m.outputs.tag }}
           URL="https://github.com/${{ github.repository }}/releases/download/$TAG/wildmon.pck"
-          jq -c --arg u "$URL" '{stamp, commit, min_apk, size, md5, pck: $u}' parts/meta.json > latest.json
+          # zincir: ayni APK'ya dayanan onceki halkalar korunur, yeni halka eklenir (APK degisince zincir sifirdan baslar)
+          OLD='{}'; test -s latest.json && OLD=$(cat latest.json)
+          jq -c --arg u "$URL" --argjson old "$OLD" '. as $m | ($m + {pck: $u}) as $e
+            | (if ($old.min_apk == $m.min_apk) then ($old.chain // []) else [] end) as $c
+            | {stamp, commit, min_apk, size, md5, pck: $u, chain: ([$c[] | select(.stamp < $m.stamp)] + [$e | {stamp, base, commit, min_apk, size, md5, pck}])}' parts/meta.json > latest.new
+          mv latest.new latest.json
+          jq -e '.chain | length > 0' latest.json
           git rm -q -r parts
           git rm -q --ignore-unmatch wildmon.pck
           rm -f wildmon.pck
