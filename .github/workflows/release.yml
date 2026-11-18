@@ -1,0 +1,47 @@
+name: Guncelleme paketini yayinla
+# parts/ klasorune parcalar halinde gonderilen paketi birlestirir, md5 dogrular, GitHub Release'e koyar,
+# latest.json'u release adresine cevirir ve parcalari depodan siler (tek dosya 100 MB siniri ve depo sismesi olmasin).
+on:
+  push:
+    branches: [main]
+    paths: ["parts/meta.json"]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: wildmon-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Birlestir ve dogrula
+        id: m
+        run: |
+          test -s parts/meta.json
+          STAMP=$(jq -r .stamp parts/meta.json); MD5=$(jq -r .md5 parts/meta.json); SIZE=$(jq -r .size parts/meta.json)
+          cat $(ls parts/wildmon.pck.part* | sort) > wildmon.pck
+          test "$(stat -c %s wildmon.pck)" = "$SIZE"
+          test "$(md5sum wildmon.pck | cut -d' ' -f1)" = "$MD5"
+          echo "tag=upd-$STAMP" >> "$GITHUB_OUTPUT"
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=${{ steps.m.outputs.tag }}
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Guncelleme $(jq -r .commit parts/meta.json)" --notes "min_apk $(jq -r .min_apk parts/meta.json), md5 $(jq -r .md5 parts/meta.json)"
+          gh release upload "$TAG" wildmon.pck --clobber
+      - name: latest.json ve temizlik
+        run: |
+          TAG=${{ steps.m.outputs.tag }}
+          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/wildmon.pck"
+          jq -c --arg u "$URL" '{stamp, commit, min_apk, size, md5, pck: $u}' parts/meta.json > latest.json
+          git rm -q -r parts
+          git rm -q --ignore-unmatch wildmon.pck
+          rm -f wildmon.pck
+          git config user.name "wildmon-release"
+          git config user.email "actions@users.noreply.github.com"
+          git add latest.json
+          git commit -m "latest.json -> $TAG (release)"
+          git push
